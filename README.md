@@ -1,56 +1,98 @@
-# Welcome to your Expo app 👋
+# GeoField Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+GeoField Mobile is a cross-platform fieldwork app built with Expo and React Native. It connects to the GeoField API so users can manage projects and tasks, record observations at GPS coordinates, and view those observations on a map.
 
-## Get started
+## Features
 
-1. Install dependencies
+- Register an account and sign in to an existing account.
+- View dashboard totals and project progress.
+- Create projects and manage their tasks, including filtering, completing, and deleting tasks.
+- Capture the device's current location and save titled observations with optional notes to a project.
+- View project observations on a map, inspect observation details, and show the current location and GPS accuracy.
+- Store native sign-in tokens with Expo SecureStore.
 
-   ```bash
-   npm install
-   ```
+## Requirements
 
-2. Start the app
+- Node.js and npm
+- A running GeoField backend API
+- Expo Go for compatible workflows, or an Android/iOS development build for native development
 
-   ```bash
-   npx expo start
-   ```
+## Getting started
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+From this directory, install dependencies and configure the API URL:
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Create a `.env` file in the project root:
 
-### Other setup steps
+```env
+EXPO_PUBLIC_API_URL=http://localhost:8000
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Set the value to the base URL of your backend (without a trailing slash). When using a physical device, `localhost` points to the device itself. Use your computer's LAN IP address instead, and make sure the phone and computer can reach each other on the network. Restart Expo after changing environment variables.
 
-## Learn more
+Start the development server:
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npx expo start
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Then open the project in Expo Go, an emulator/simulator, or a development build. Available platform shortcuts are:
 
-## Join the community
+```bash
+npm run android
+npm run ios
+npm run web
+```
 
-Join our community of developers creating universal apps.
+Some native modules and map workflows may require a development build instead of Expo Go. To run a native development build locally, use `npx expo run:android` or `npx expo run:ios` after setting up the relevant platform toolchain.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## App structure
+
+| Path | Purpose |
+| --- | --- |
+| `src/app/(tabs)/index.tsx` | Sign-in screen |
+| `src/app/register.tsx` | Account registration |
+| `src/app/(tabs)/dashboard.tsx` | Workspace summary and project progress |
+| `src/app/projects.tsx` | Project list and project creation |
+| `src/app/tasks.tsx` | Project task management |
+| `src/app/observations.tsx` | Capture and manage field observations |
+| `src/app/map.tsx` | Map and inspect project observations |
+| `src/components/ObservationMap.tsx` | Interactive observation map |
+| `src/lib/api.ts` | Shared API request helper |
+
+Navigation uses Expo Router file-based routes. The backend API is responsible for authentication, project/task/observation data, and dashboard summaries.
+
+## Backend API
+
+The app expects a GeoField backend reachable at `EXPO_PUBLIC_API_URL`. Its current requests include:
+
+- `POST /register` and `POST /login`
+- `GET /me` and `GET /dashboard`
+- `GET /projects` and `POST /projects`
+- Project task endpoints under `/projects/{projectId}/tasks`
+- Project observation endpoints under `/projects/{projectId}/observations`
+
+Sign-in uses an OAuth2 password form and saves the returned access token for authenticated requests. Ensure the API's CORS and network settings allow requests from the platform where the app is running.
+
+## Development commands
+
+```bash
+npm run start       # Start Expo
+npm run android     # Start Expo for Android
+npm run ios         # Start Expo for iOS
+npm run web         # Start Expo for web
+npm run lint        # Run Expo lint
+npm run reset-project # Run the Expo starter reset script (destructive to starter app files)
+```
+
+The reset script is inherited from the Expo starter and is not part of normal GeoField development.
+
+## Notes
+
+- Expo app configuration is in `app.json`; routes and screens live in `src/app/`.
+- Foreground location permission is requested when capturing or displaying the user's location.
+- The observation map loads Leaflet and OpenStreetMap tiles over the network.
+- Do not commit `.env` files or place private credentials in `EXPO_PUBLIC_*` variables. Expo public variables are bundled into the client app.

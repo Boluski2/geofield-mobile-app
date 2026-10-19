@@ -48,11 +48,20 @@ export default function ObservationMap({
         ? userLocation
         : null;
 
-    const first = validObservations[0];
-    const centerLat = validUserLocation?.latitude ??
-      Number(first?.latitude ?? 6.5244);
-    const centerLon = validUserLocation?.longitude ??
-      Number(first?.longitude ?? 3.3792);
+            const selectedObservation = validObservations.find(
+          (item) => Number(item.id) === Number(selectedObservationId)
+        );
+
+            const first = validObservations[0];
+            const centerLat =
+              selectedObservation?.latitude ??
+              validUserLocation?.latitude ??
+              Number(first?.latitude ?? 6.5244);
+
+            const centerLon =
+              selectedObservation?.longitude ??
+              validUserLocation?.longitude ??
+              Number(first?.longitude ?? 3.3792);
 
     const safeObservations = JSON.stringify(
       validObservations.map((item) => ({
@@ -101,6 +110,14 @@ export default function ObservationMap({
               border-radius: 50%;
               box-shadow: 0 0 0 2px #2563eb;
             }
+              .selected-observation-marker div {
+              width: 24px;
+              height: 24px;
+              background: #F97316;
+              border: 4px solid white;
+              border-radius: 50%;
+              box-shadow: 0 0 0 4px #F97316;
+            }
           </style>
         </head>
         <body>
@@ -110,10 +127,14 @@ export default function ObservationMap({
             const observations = ${safeObservations};
             const userLocation = ${safeUserLocation};
             const accuracy = ${safeAccuracy};
+            const selectedObservationId = ${JSON.stringify(
+              selectedObservationId
+            )};
 
-            const map = L.map("map").setView(
-              [${centerLat}, ${centerLon}], 13
-            );
+              const map = L.map("map").setView(
+                [${centerLat}, ${centerLon}],
+                selectedObservationId !== null ? 17 : 13
+              );
 
             L.tileLayer(
               "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -136,11 +157,32 @@ export default function ObservationMap({
               }
             }
 
-            observations.forEach((item) => {
-              const marker = L.marker([
-                item.latitude,
-                item.longitude
-              ]).addTo(map);
+                let selectedMarker = null;
+
+                observations.forEach((item) => {
+                  const isSelected =
+                    Number(item.id) === Number(selectedObservationId);
+
+                  const markerOptions = isSelected
+                    ? {
+                        icon: L.divIcon({
+                          className: "selected-observation-marker",
+                          html: "<div></div>",
+                          iconSize: [24, 24],
+                          iconAnchor: [12, 12]
+                        }),
+                        zIndexOffset: 1000
+                      }
+                    : {};
+
+                  const marker = L.marker(
+                    [item.latitude, item.longitude],
+                    markerOptions
+                  ).addTo(map);
+
+                  if (isSelected) {
+                    selectedMarker = marker;
+                  }
 
               const popup = document.createElement("div");
               const title = document.createElement("strong");
@@ -195,19 +237,29 @@ export default function ObservationMap({
               boundsPoints.push(position);
             }
 
-            if (boundsPoints.length > 1) {
-              map.fitBounds(boundsPoints, {
-                padding: [30, 30],
-                maxZoom: 16
-              });
-            } else if (boundsPoints.length === 1) {
-              map.setView(boundsPoints[0], 15);
-            }
+              if (selectedMarker) {
+                const selectedPosition = selectedMarker.getLatLng();
+
+                map.setView(selectedPosition, 17);
+                selectedMarker.openPopup();
+              } else if (boundsPoints.length > 1) {
+                map.fitBounds(boundsPoints, {
+                  padding: [30, 30],
+                  maxZoom: 16
+                });
+              } else if (boundsPoints.length === 1) {
+                map.setView(boundsPoints[0], 15);
+              }
           </script>
         </body>
       </html>
     `;
-  }, [observations, userLocation, accuracy]);
+    }, [
+      observations,
+      userLocation,
+      accuracy,
+      selectedObservationId,
+    ]);
 
   function handleMessage(event: WebViewMessageEvent) {
     try {

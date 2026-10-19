@@ -18,10 +18,19 @@ import ObservationMap, {
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 export default function MapScreen() {
-  const { projectId, projectName } = useLocalSearchParams<{
-    projectId: string;
-    projectName?: string;
-  }>();
+const {
+  projectId,
+  projectName,
+  observationId,
+} = useLocalSearchParams<{
+  projectId: string;
+  projectName?: string;
+  observationId?: string;
+}>();
+
+const selectedObservationId = observationId
+  ? Number(observationId)
+  : null;
 
   const [observations, setObservations] = useState<ObservationPoint[]>([]);
   const [loading, setLoading] = useState(true);
@@ -206,12 +215,14 @@ export default function MapScreen() {
 
           <View style={styles.mapContainer}>
             <ObservationMap
-            observations={observations}
-            userLocation={userLocation}
-            accuracy={accuracy}
-            onSelectObservation={setSelectedObservation}
-            selectedObservationId={selectedObservation?.id ?? null}
-          />
+              observations={observations}
+              userLocation={userLocation}
+              accuracy={accuracy}
+              onSelectObservation={setSelectedObservation}
+              selectedObservationId={
+                selectedObservation?.id ?? selectedObservationId
+              }
+            />
           </View>
           {selectedObservation && (
   <View style={styles.detailsCard}>

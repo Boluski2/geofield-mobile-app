@@ -1,7 +1,8 @@
-
 import {
   Alert,
+  // Image,
   Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,15 +10,32 @@ import {
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as Location from "expo-location";
+import * as ImagePicker from "expo-image-picker";
+import * as SecureStore from "expo-secure-store";
+import { File } from "expo-file-system";
+import { Image } from "expo-image";
 
 type Coordinates = {
   latitude: number;
   longitude: number;
 };
 
-// Calculate distance between two GPS positions using the Haversine formula.
+type SavedPhoto = {
+  id: number;
+  observation_id: number;
+  filename: string;
+  content_type: string;
+  created_at: string;
+};
+
+type PhotoResponse = {
+  photos?: SavedPhoto[];
+  detail?: string;
+  message?: string;
+};
+
 function calculateDistance(
   start: Coordinates,
   end: Coordinates
@@ -25,12 +43,8 @@ function calculateDistance(
   const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
   const earthRadius = 6371000;
 
-  const latDifference = toRadians(
-    end.latitude - start.latitude
-  );
-  const lonDifference = toRadians(
-    end.longitude - start.longitude
-  );
+  const latDifference = toRadians(end.latitude - start.latitude);
+  const lonDifference = toRadians(end.longitude - start.longitude);
 
   const a =
     Math.sin(latDifference / 2) ** 2 +
@@ -47,7 +61,6 @@ function calculateDistance(
   );
 }
 
-// Calculate the compass bearing from your location to the observation.
 function calculateBearing(
   start: Coordinates,
   end: Coordinates
@@ -57,9 +70,7 @@ function calculateBearing(
 
   const lat1 = toRadians(start.latitude);
   const lat2 = toRadians(end.latitude);
-  const lonDifference = toRadians(
-    end.longitude - start.longitude
-  );
+  const lonDifference = toRadians(end.longitude - start.longitude);
 
   const y = Math.sin(lonDifference) * Math.cos(lat2);
   const x =
@@ -70,17 +81,7 @@ function calculateBearing(
 }
 
 function getCompassDirection(bearing: number): string {
-  const directions = [
-    "N",
-    "NE",
-    "E",
-    "SE",
-    "S",
-    "SW",
-    "W",
-    "NW",
-  ];
-
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
   return directions[Math.round(bearing / 45) % 8];
 }
 
@@ -88,40 +89,326 @@ export default function ObservationDetailsScreen() {
   const router = useRouter();
 
   const params = useLocalSearchParams<{
-    id: string;
-    projectId: string;
-    projectName?: string;
-    title: string;
-    notes?: string;
-    latitude: string;
-    longitude: string;
-    status: string;
-    createdAt: string;
+    id: string | string[];
+    projectId: string | string[];
+    projectName?: string | string[];
+    title: string | string[];
+    notes?: string | string[];
+    latitude: string | string[];
+    longitude: string | string[];
+    status: string | string[];
+    createdAt: string | string[];
   }>();
 
-  const latitude = Number(params.latitude);
-  const longitude = Number(params.longitude);
+  const getParam = (
+    value: string | string[] | undefined
+  ): string => {
+    return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+  };
+
+  const observationId = getParam(params.id);
+  const projectId = getParam(params.projectId);
+  const projectName = getParam(params.projectName);
+  const title = getParam(params.title);
+  const notes = getParam(params.notes);
+  const latitudeText = getParam(params.latitude);
+  const longitudeText = getParam(params.longitude);
+  const observationStatus = getParam(params.status);
+  const createdAt = getParam(params.createdAt);
+
+  const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+
+  const [savedPhotos, setSavedPhotos] = useState<SavedPhoto[]>([]);
+  const [photoToken, setPhotoToken] = useState<string | null>(null);
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
+  const [photoError, setPhotoError] = useState("");
+  const [selectedPhoto, setSelectedPhoto] =
+    useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const [currentLocation, setCurrentLocation] =
+    useState<Coordinates | null>(null);
+  const [distance, setDistance] = useState<number | null>(null);
+  const [bearing, setBearing] = useState<number | null>(null);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [viewingPhoto, setViewingPhoto] =
+  useState<SavedPhoto | null>(null);
+
+  const latitude = Number(latitudeText);
+  const longitude = Number(longitudeText);
 
   const validCoordinates =
-    params.latitude?.trim() !== "" &&
-    params.longitude?.trim() !== "" &&
+    latitudeText.trim() !== "" &&
+    longitudeText.trim() !== "" &&
     Number.isFinite(latitude) &&
     Number.isFinite(longitude) &&
     Math.abs(latitude) <= 90 &&
     Math.abs(longitude) <= 180;
 
-  const createdDate = new Date(params.createdAt);
-  const validDate = !Number.isNaN(createdDate.getTime());
+  const createdDate = new Date(createdAt);
+  const validDate =
+    createdAt !== "" && !Number.isNaN(createdDate.getTime());
 
   const status =
-    params.status === "reviewed" ? "Reviewed" : "Pending";
+    observationStatus === "reviewed" ? "Reviewed" : "Pending";
 
-  const [currentLocation, setCurrentLocation] =
-    useState<Coordinates | null>(null);
+  const loadSavedPhotos = useCallback(async () => {
+    if (!observationId || !apiUrl) {
+      setPhotoError(
+        !observationId
+          ? "Observation ID is missing."
+          : "The API URL is not configured."
+      );
+      return;
+    }
 
-  const [distance, setDistance] = useState<number | null>(null);
-  const [bearing, setBearing] = useState<number | null>(null);
-  const [locationLoading, setLocationLoading] = useState(false);
+    setLoadingPhotos(true);
+    setPhotoError("");
+
+    try {
+      const token = await SecureStore.getItemAsync("access_token");
+
+      console.log("Photo token available:", Boolean(token));
+      console.log("Photo token length:", token?.length ?? 0);
+      if (!token) {
+        throw new Error("Please sign in again to view your photos.");
+      }
+
+      const response = await fetch(
+        `${apiUrl}/observations/${observationId}/photos`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const result: PhotoResponse = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.detail ?? "Could not load saved photos."
+        );
+      }
+
+      setPhotoToken(token);
+      setSavedPhotos(result.photos ?? []);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load saved photos.";
+
+      setPhotoError(message);
+      console.error("Load saved photos error:", error);
+    } finally {
+      setLoadingPhotos(false);
+    }
+  }, [observationId, apiUrl]);
+
+
+  
+const deletePhoto = (photo: SavedPhoto) => {
+  Alert.alert(
+    "Delete photo",
+    "Are you sure you want to permanently delete this photo?",
+    [
+      {
+        text: "Cancel",
+        style: "cancel",
+      },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            const token =
+              await SecureStore.getItemAsync("access_token");
+
+            if (!token) {
+              Alert.alert(
+                "Session expired",
+                "Please sign in again."
+              );
+              return;
+            }
+
+            const apiUrl =
+              process.env.EXPO_PUBLIC_API_URL;
+
+            if (!apiUrl) {
+              throw new Error(
+                "API URL is not configured."
+              );
+            }
+
+            const response = await fetch(
+              `${apiUrl}/observations/${photo.observation_id}/photos/${photo.id}`,
+              {
+                method: "DELETE",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              }
+            );
+
+            if (!response.ok) {
+              const body = await response.text();
+
+              throw new Error(
+                `Delete failed (${response.status}): ${body}`
+              );
+            }
+
+            setSavedPhotos((current) =>
+              current.filter(
+                (item) => item.id !== photo.id
+              )
+            );
+
+            if (viewingPhoto?.id === photo.id) {
+              setViewingPhoto(null);
+            }
+
+            Alert.alert(
+              "Success",
+              "Photo deleted successfully."
+            );
+          } catch (error) {
+            console.error("Delete photo error:", error);
+
+            Alert.alert(
+              "Unable to delete photo",
+              error instanceof Error
+                ? error.message
+                : "Please try again."
+            );
+          }
+        },
+      },
+    ]
+  );
+};
+
+
+
+  useEffect(() => {
+    void loadSavedPhotos();
+  }, [loadSavedPhotos]);
+
+  const choosePhoto = async (useCamera: boolean) => {
+    try {
+      const permission = useCamera
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          "Permission required",
+          useCamera
+            ? "Allow camera access to take a photo."
+            : "Allow photo-library access to choose a photo."
+        );
+        return;
+      }
+
+      const result = useCamera
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            allowsEditing: true,
+            quality: 0.8,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            allowsEditing: true,
+            quality: 0.8,
+          });
+
+      if (!result.canceled && result.assets.length > 0) {
+        setSelectedPhoto(result.assets[0]);
+      }
+    } catch (error) {
+      console.error("Choose photo error:", error);
+      Alert.alert(
+        "Error",
+        "Could not open the camera or photo gallery."
+      );
+    }
+  };
+
+  const uploadSelectedPhoto = async () => {
+    if (!selectedPhoto) {
+      Alert.alert("No photo selected", "Take or choose a photo first.");
+      return;
+    }
+
+    if (!observationId || !apiUrl) {
+      Alert.alert(
+        "Configuration error",
+        "The observation ID or API URL is missing."
+      );
+      return;
+    }
+
+    if (uploadingPhoto || !selectedPhoto) {
+        return;
+      }
+
+    setUploadingPhoto(true);
+
+    try {
+      const token = await SecureStore.getItemAsync("access_token");
+
+      if (!token) {
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const filename =
+        selectedPhoto.fileName ??
+        `observation-${observationId}-${Date.now()}.jpg`;
+
+      const photoFile = new File(selectedPhoto.uri);
+      const formData = new FormData();
+
+      formData.append("file", photoFile, filename);
+
+      const response = await fetch(
+        `${apiUrl}/observations/${observationId}/photos`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.detail ?? "The photo upload failed."
+        );
+      }
+
+      setSelectedPhoto(null);
+
+      await loadSavedPhotos();
+
+      Alert.alert("Success", "Photo uploaded successfully!");
+    } catch (error) {
+      console.error("Upload photo error:", error);
+
+      Alert.alert(
+        "Upload failed",
+        error instanceof Error
+          ? error.message
+          : "Please try again."
+      );
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   async function calculateDistanceFromMyLocation() {
     if (!validCoordinates) {
@@ -162,10 +449,9 @@ export default function ObservationDetailsScreen() {
         return;
       }
 
-      const position =
-        await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
 
       const current = {
         latitude: position.coords.latitude,
@@ -227,26 +513,171 @@ export default function ObservationDetailsScreen() {
       </Pressable>
 
       <Text style={styles.heading}>Observation Details</Text>
+
       <Text style={styles.subtitle}>
-        {params.projectName || "Field Project"}
+        {projectName || "Field Project"}
       </Text>
 
+      {/* Photo capture and upload */}
+      <View style={styles.photoSection}>
+        <Text style={styles.sectionHeading}>
+          Observation Photos
+        </Text>
+
+        <View style={styles.photoButtonRow}>
+          <Pressable
+            onPress={() => void choosePhoto(true)}
+            style={styles.cameraButton}
+          >
+            <Text style={styles.buttonText}>Take a Photo</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => void choosePhoto(false)}
+            style={styles.galleryButton}
+          >
+            <Text style={styles.buttonText}>Choose from Gallery</Text>
+          </Pressable>
+        </View>
+
+        {selectedPhoto && (
+          <View style={styles.photoCard}>
+            <Text style={styles.photoHeading}>
+              Selected Photo Preview
+            </Text>
+
+            <Image
+              source={{ uri: selectedPhoto.uri }}
+              style={styles.photoImage}
+              resizeMode="cover"
+            />
+
+            <Text style={styles.photoMetadata}>
+              {selectedPhoto.fileName ?? "Selected image"}
+            </Text>
+
+            <Pressable
+              onPress={uploadSelectedPhoto}
+              disabled={uploadingPhoto || !selectedPhoto}
+              style={[
+                styles.uploadButton,
+                (uploadingPhoto || !selectedPhoto) &&
+                  styles.disabledButton,
+              ]}
+            >
+              <Text style={styles.uploadButtonText}>
+                {uploadingPhoto ? "Uploading..." : "Upload Photo"}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => setSelectedPhoto(null)}
+              disabled={uploadingPhoto}
+              style={styles.cancelButton}
+            >
+              <Text style={styles.cancelButtonText}>
+                Cancel Selection
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        <View style={styles.savedPhotosHeader}>
+          {/* <Text style={styles.sectionHeading}> */}
+          <Text style={styles.sectionTitle}>
+            Saved Photos ({savedPhotos.length})
+          </Text>
+
+          <Pressable onPress={() => void loadSavedPhotos()}>
+            <Text style={styles.refreshText}>Refresh</Text>
+          </Pressable>
+        </View>
+
+        {loadingPhotos && (
+          <Text style={styles.photoMetadata}>
+            Loading saved photos...
+          </Text>
+        )}
+
+        {!!photoError && (
+          <View>
+            <Text style={styles.errorText}>{photoError}</Text>
+
+            <Pressable onPress={() => void loadSavedPhotos()}>
+              <Text style={styles.refreshText}>Try Again</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {!loadingPhotos &&
+          !photoError &&
+          savedPhotos.length === 0 && (
+            <Text style={styles.photoMetadata}>
+              No photos uploaded for this observation yet.
+            </Text>
+          )}
+
+        {savedPhotos.map((photo) => (
+          <View key={photo.id} style={styles.photoCard}>
+            <Text style={styles.photoHeading}>
+              Photo #{photo.id}
+            </Text>
+
+            <Pressable
+              onPress={() => setViewingPhoto(photo)}
+            >
+            <Image
+              source={{
+                uri: `${apiUrl}/observations/${photo.observation_id}/photos/${photo.id}/image`,
+                headers: {
+                  Authorization: `Bearer ${photoToken}`,
+                },
+              }}
+              style={styles.photoImage}
+               contentFit="cover"
+            />
+            </Pressable>
+
+             <Pressable
+              onPress={() => deletePhoto(photo)}
+              style={styles.deletePhotoButton}
+            >
+              <Text style={styles.deletePhotoText}>
+                Delete photo
+              </Text>
+            </Pressable>
+
+
+
+            <Text style={styles.photoMetadata}>
+              {photo.filename}
+            </Text>
+
+            <Text style={styles.photoMetadata}>
+              Uploaded:{" "}
+              {new Date(photo.created_at).toLocaleString()}
+            </Text>
+          </View>
+          
+        ))}
+      </View>
+
+      {/* Observation information */}
       <View style={styles.card}>
         <Text style={styles.label}>Observation title</Text>
-        <Text style={styles.title}>
-          {params.title || "Untitled"}
-        </Text>
+        <Text style={styles.title}>{title || "Untitled"}</Text>
 
         <Text style={styles.label}>Notes</Text>
         <Text style={styles.notes}>
-          {params.notes?.trim() || "No notes provided."}
+          {notes.trim() || "No notes provided."}
         </Text>
 
         <Text style={styles.label}>Review status</Text>
+
         <View
           style={[
             styles.badge,
-            params.status === "reviewed"
+            observationStatus === "reviewed"
               ? styles.reviewed
               : styles.pending,
           ]}
@@ -254,7 +685,7 @@ export default function ObservationDetailsScreen() {
           <Text
             style={[
               styles.badgeText,
-              params.status === "reviewed"
+              observationStatus === "reviewed"
                 ? styles.reviewedText
                 : styles.pendingText,
             ]}
@@ -275,7 +706,7 @@ export default function ObservationDetailsScreen() {
 
         <Text style={styles.label}>Observation ID</Text>
         <Text style={styles.coordinate}>
-          {params.id || "Unavailable"}
+          {observationId || "Unavailable"}
         </Text>
 
         <Text style={styles.label}>Date recorded</Text>
@@ -286,6 +717,7 @@ export default function ObservationDetailsScreen() {
         </Text>
       </View>
 
+      {/* GPS distance and navigation */}
       <View style={styles.navigationCard}>
         <Text style={styles.navigationHeading}>
           GPS Navigation
@@ -300,6 +732,7 @@ export default function ObservationDetailsScreen() {
             <Text style={styles.distanceLabel}>
               Distance from your location
             </Text>
+
             <Text style={styles.distanceValue}>
               {formattedDistance}
             </Text>
@@ -354,9 +787,9 @@ export default function ObservationDetailsScreen() {
           router.push({
             pathname: "/map",
             params: {
-              projectId: params.projectId,
-              projectName: params.projectName || "Field Project",
-              observationId: params.id,
+              projectId,
+              projectName: projectName || "Field Project",
+              observationId,
             },
           })
         }
@@ -365,6 +798,37 @@ export default function ObservationDetailsScreen() {
           View Project Observations on Map
         </Text>
       </Pressable>
+
+      <Modal
+        visible={viewingPhoto !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewingPhoto(null)}
+      >
+        <View style={styles.photoViewer}>
+          <Pressable
+            style={styles.closeViewerButton}
+            onPress={() => setViewingPhoto(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Close photo"
+          >
+            <Text style={styles.closeViewerText}>✕</Text>
+          </Pressable>
+
+          {viewingPhoto && (
+            <Image
+              source={{
+                uri: `${apiUrl}/observations/${viewingPhoto.observation_id}/photos/${viewingPhoto.id}/image`,
+                headers: {
+                  Authorization: `Bearer ${photoToken}`,
+                },
+              }}
+              style={styles.fullScreenPhoto}
+              contentFit="contain"
+            />
+          )}
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -394,6 +858,89 @@ const styles = StyleSheet.create({
     color: "#64748B",
     marginTop: 6,
     marginBottom: 20,
+  },
+  photoSection: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 18,
+    gap: 12,
+  },
+  sectionHeading: {
+    fontSize: 19,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  photoButtonRow: {
+    gap: 10,
+  },
+  cameraButton: {
+    backgroundColor: "#2563EB",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  galleryButton: {
+    backgroundColor: "#15803D",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  uploadButton: {
+    backgroundColor: "#7C3AED",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  cancelButton: {
+    alignItems: "center",
+    padding: 10,
+  },
+  cancelButtonText: {
+    color: "#DC2626",
+    fontWeight: "600",
+  },
+  savedPhotosHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 12,
+  },
+  refreshText: {
+    color: "#2563EB",
+    fontWeight: "700",
+  },
+  photoCard: {
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+    paddingTop: 12,
+    marginTop: 8,
+    gap: 6,
+  },
+  photoHeading: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  photoImage: {
+    width: "100%",
+    height: 240,
+    borderRadius: 12,
+    backgroundColor: "#E5E7EB",
+    marginVertical: 6,
+  },
+  photoMetadata: {
+    color: "#64748B",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  errorText: {
+    color: "#DC2626",
+    marginVertical: 6,
   },
   card: {
     backgroundColor: "#FFFFFF",
@@ -517,4 +1064,53 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textAlign: "center",
   },
+  photoViewer: {
+  flex: 1,
+  backgroundColor: "#000000",
+  justifyContent: "center",
+  alignItems: "center",
+},
+
+closeViewerButton: {
+  position: "absolute",
+  top: 50,
+  right: 20,
+  zIndex: 10,
+  width: 44,
+  height: 44,
+  borderRadius: 22,
+  backgroundColor: "#333333",
+  justifyContent: "center",
+  alignItems: "center",
+},
+
+closeViewerText: {
+  color: "#FFFFFF",
+  fontSize: 24,
+  fontWeight: "bold",
+},
+
+fullScreenPhoto: {
+  width: "100%",
+  height: "80%",
+},
+deletePhotoButton: {
+  marginTop: 8,
+  paddingVertical: 10,
+  paddingHorizontal: 14,
+  borderRadius: 8,
+  backgroundColor: "#FEE2E2",
+  alignSelf: "flex-start",
+},
+
+deletePhotoText: {
+  color: "#B91C1C",
+  fontWeight: "600",
+},
+uploadButtonText: {
+  color: "#FFFFFF",
+  fontSize: 15,
+  fontWeight: "700",
+  textAlign: "center",
+},
 });

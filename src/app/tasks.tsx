@@ -22,6 +22,10 @@ type Task = {
   project_id: number;
 };
 
+type TasksResponse = {
+  tasks: Task[];
+};
+
 type Filter = "all" | "completed" | "pending";
 
 async function getToken() {
@@ -73,10 +77,11 @@ export default function TasksScreen() {
     setError("");
 
     try {
-      const data = await request(
-        `/projects/${projectId}/tasks?status=${filter}`
-      );
-      setTasks(data.tasks);
+        const data = (await request(
+          `/projects/${projectId}/tasks?status=${filter}`
+        )) as TasksResponse;
+
+        setTasks(data.tasks);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load tasks.");
     } finally {

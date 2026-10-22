@@ -1,21 +1,23 @@
 import {
   Alert,
-  // Image,
+  ActivityIndicator,
   Linking,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import * as SecureStore from "expo-secure-store";
 import { File } from "expo-file-system";
 import { Image } from "expo-image";
+import * as Crypto from "expo-crypto";
 
 type Coordinates = {
   latitude: number;
@@ -27,6 +29,7 @@ type SavedPhoto = {
   observation_id: number;
   filename: string;
   content_type: string;
+  caption: string | null;
   created_at: string;
 };
 
@@ -122,9 +125,12 @@ export default function ObservationDetailsScreen() {
   const [photoToken, setPhotoToken] = useState<string | null>(null);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [photoError, setPhotoError] = useState("");
+  const [failedPhotoIds, setFailedPhotoIds] = useState<number[]>([]);
   const [selectedPhoto, setSelectedPhoto] =
     useState<ImagePicker.ImagePickerAsset | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const uploadLock = useRef(false);
+  const uploadIdempotencyKey = useRef<string | null>(null);
 
   const [currentLocation, setCurrentLocation] =
     useState<Coordinates | null>(null);
@@ -133,6 +139,10 @@ export default function ObservationDetailsScreen() {
   const [locationLoading, setLocationLoading] = useState(false);
   const [viewingPhoto, setViewingPhoto] =
   useState<SavedPhoto | null>(null);
+  const [photoCaption, setPhotoCaption] = useState("");
+  const [editingCaptionPhotoId, setEditingCaptionPhotoId] =
+  useState<number | null>(null);
+  const [editingCaption, setEditingCaption] = useState("");
 
   const latitude = Number(latitudeText);
   const longitude = Number(longitudeText);
@@ -206,6 +216,57 @@ export default function ObservationDetailsScreen() {
     }
   }, [observationId, apiUrl]);
 
+  const savePhotoCaption = async (photo: SavedPhoto) => {
+    try {
+      const token = await SecureStore.getItemAsync("access_token");
+
+      if (!token) {
+        Alert.alert("Session expired", "Please sign in again.");
+        return;
+      }
+
+      if (!apiUrl) {
+        throw new Error("API URL is not configured.");
+      }
+
+      const response = await fetch(
+        `${apiUrl}/observations/${photo.observation_id}/photos/${photo.id}/caption`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            caption: editingCaption.trim() || null,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Caption update failed (${response.status}).`);
+      }
+
+      const result = await response.json();
+
+      setSavedPhotos((current) =>
+        current.map((item) =>
+          item.id === photo.id
+            ? { ...item, caption: result.photo.caption }
+            : item
+        )
+      );
+      setEditingCaptionPhotoId(null);
+      setEditingCaption("");
+      Alert.alert("Success", "Photo caption updated.");
+    } catch (error) {
+      console.error("Save caption error:", error);
+      Alert.alert(
+        "Update failed",
+        error instanceof Error ? error.message : "Please try again."
+      );
+    }
+  };
 
   
 const deletePhoto = (photo: SavedPhoto) => {
@@ -325,6 +386,7 @@ const deletePhoto = (photo: SavedPhoto) => {
           });
 
       if (!result.canceled && result.assets.length > 0) {
+        uploadIdempotencyKey.current = null;
         setSelectedPhoto(result.assets[0]);
       }
     } catch (error) {
@@ -350,9 +412,15 @@ const deletePhoto = (photo: SavedPhoto) => {
       return;
     }
 
-    if (uploadingPhoto || !selectedPhoto) {
-        return;
-      }
+          if (uploadLock.current || uploadingPhoto || !selectedPhoto) {
+            return;
+          }
+
+          uploadLock.current = true;
+          if (!uploadIdempotencyKey.current) {
+            uploadIdempotencyKey.current = Crypto.randomUUID();
+          }
+          setUploadingPhoto(true);
 
     setUploadingPhoto(true);
 
@@ -371,6 +439,12 @@ const deletePhoto = (photo: SavedPhoto) => {
       const formData = new FormData();
 
       formData.append("file", photoFile, filename);
+    //   formData.append("file", {
+    //   uri: selectedPhoto.uri,
+    //   name: selectedPhoto.fileName ?? "photo.jpg",
+    //   type: selectedPhoto.mimeType ?? "image/jpeg",
+    // } as any);
+      formData.append("caption", photoCaption.trim());
 
       const response = await fetch(
         `${apiUrl}/observations/${observationId}/photos`,
@@ -378,20 +452,43 @@ const deletePhoto = (photo: SavedPhoto) => {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
+            "Idempotency-Key": uploadIdempotencyKey.current!,
           },
           body: formData,
         }
       );
 
-      const result = await response.json();
 
-      if (!response.ok) {
-        throw new Error(
-          result.detail ?? "The photo upload failed."
-        );
-      }
+              let result: {
+                detail?: string;
+                message?: string;
+              } = {};
 
-      setSelectedPhoto(null);
+              try {
+                result = await response.json();
+              } catch {
+                // The server may return an empty or non-JSON response.
+              }
+
+              if (!response.ok) {
+                const message =
+                  result.detail ??
+                  result.message ??
+                  (response.status === 401
+                    ? "Your session has expired. Please sign in again."
+                    : response.status === 413
+                      ? "The photo is too large. Please choose a smaller image."
+                      : response.status >= 500
+                        ? "The server encountered a problem. Please try again later."
+                        : `Photo upload failed (HTTP ${response.status}).`);
+
+                throw new Error(message);
+              }
+
+
+            uploadIdempotencyKey.current = null;
+            setSelectedPhoto(null);
+            setPhotoCaption("");
 
       await loadSavedPhotos();
 
@@ -399,13 +496,24 @@ const deletePhoto = (photo: SavedPhoto) => {
     } catch (error) {
       console.error("Upload photo error:", error);
 
-      Alert.alert(
-        "Upload failed",
-        error instanceof Error
-          ? error.message
-          : "Please try again."
-      );
+      let message = "Something went wrong. Please try again.";
+
+        if (error instanceof Error) {
+          if (
+            error.message.includes("Network request failed") ||
+            error.message.includes("Failed to fetch") ||
+            error.message.includes("NetworkError")
+          ) {
+            message =
+              "Could not connect to the server. Check your internet connection and make sure the GeoField API is running.";
+          } else {
+            message = error.message;
+          }
+        }
+
+  Alert.alert("Upload failed", message);
     } finally {
+      uploadLock.current = false;
       setUploadingPhoto(false);
     }
   };
@@ -541,7 +649,8 @@ const deletePhoto = (photo: SavedPhoto) => {
         </View>
 
         {selectedPhoto && (
-          <View style={styles.photoCard}>
+          // <View style={styles.photoCard}>
+          <View style={styles.selectedPhotoCard}>
             <Text style={styles.photoHeading}>
               Selected Photo Preview
             </Text>
@@ -556,9 +665,30 @@ const deletePhoto = (photo: SavedPhoto) => {
               {selectedPhoto.fileName ?? "Selected image"}
             </Text>
 
+            <Text style={styles.sectionHeading}>Photo Caption</Text>
+            <TextInput
+              value={photoCaption}
+              onChangeText={setPhotoCaption}
+              placeholder="Describe what this photo shows..."
+              maxLength={255}
+              multiline
+              style={styles.captionInput}
+            />
+            <Text style={styles.captionCounter}>
+              {photoCaption.length}/255
+            </Text>
+
             <Pressable
               onPress={uploadSelectedPhoto}
               disabled={uploadingPhoto || !selectedPhoto}
+              accessibilityRole="button"
+              accessibilityLabel={
+              uploadingPhoto ? "Uploading photo" : "Upload selected photo"
+                }
+                accessibilityState={{
+                disabled: uploadingPhoto || !selectedPhoto,
+                busy: uploadingPhoto,
+                 }}
               style={[
                 styles.uploadButton,
                 (uploadingPhoto || !selectedPhoto) &&
@@ -583,8 +713,8 @@ const deletePhoto = (photo: SavedPhoto) => {
         )}
 
         <View style={styles.savedPhotosHeader}>
-          {/* <Text style={styles.sectionHeading}> */}
-          <Text style={styles.sectionTitle}>
+          <Text style={styles.sectionHeading}>
+          {/* <Text style={styles.sectionTitle}> */}
             Saved Photos ({savedPhotos.length})
           </Text>
 
@@ -593,11 +723,14 @@ const deletePhoto = (photo: SavedPhoto) => {
           </Pressable>
         </View>
 
-        {loadingPhotos && (
-          <Text style={styles.photoMetadata}>
-            Loading saved photos...
-          </Text>
-        )}
+          {loadingPhotos && (
+            <View style={styles.photoLoading}>
+              <ActivityIndicator size="large" color="#2563EB" />
+              <Text style={styles.photoLoadingText}>
+                Loading your photos...
+              </Text>
+            </View>
+          )}
 
         {!!photoError && (
           <View>
@@ -609,14 +742,24 @@ const deletePhoto = (photo: SavedPhoto) => {
           </View>
         )}
 
-        {!loadingPhotos &&
-          !photoError &&
-          savedPhotos.length === 0 && (
-            <Text style={styles.photoMetadata}>
-              No photos uploaded for this observation yet.
-            </Text>
-          )}
+            {!loadingPhotos &&
+              !photoError &&
+              savedPhotos.length === 0 && (
+                <View style={styles.emptyPhotoState}>
+                  <Text style={styles.emptyPhotoIcon}>📷</Text>
 
+                  <Text style={styles.emptyPhotoTitle}>
+                    No photos yet
+                  </Text>
+
+                  <Text style={styles.emptyPhotoMessage}>
+                    Add photos to document this observation and keep
+                    visual evidence of your fieldwork.
+                  </Text>
+                </View>
+              )}
+
+          <View style={styles.photoGallery}>
         {savedPhotos.map((photo) => (
           <View key={photo.id} style={styles.photoCard}>
             <Text style={styles.photoHeading}>
@@ -625,6 +768,9 @@ const deletePhoto = (photo: SavedPhoto) => {
 
             <Pressable
               onPress={() => setViewingPhoto(photo)}
+              accessibilityRole="button"
+              accessibilityLabel={`View photo: ${photo.caption?.trim() || `Photo ${photo.id}`}`}
+              accessibilityHint="Opens this photo in the full-screen viewer"
             >
             <Image
               source={{
@@ -633,14 +779,89 @@ const deletePhoto = (photo: SavedPhoto) => {
                   Authorization: `Bearer ${photoToken}`,
                 },
               }}
-              style={styles.photoImage}
-               contentFit="cover"
+            style={styles.photoImage}
+              contentFit="cover"
+              accessibilityLabel={photo.caption?.trim() || "Observation photo"}
+              onLoad={() => {
+                setFailedPhotoIds((previous) =>
+                  previous.filter((id) => id !== photo.id)
+                );
+              }}
+              onError={() => {
+                setFailedPhotoIds((previous) =>
+                  previous.includes(photo.id)
+                    ? previous
+                    : [...previous, photo.id]
+                );
+              }}
             />
             </Pressable>
+            {failedPhotoIds.includes(photo.id) && (
+            <View style={styles.photoImageError}>
+              <Text style={styles.photoImageErrorTitle}>
+                Photo unavailable
+              </Text>
+              <Text style={styles.photoImageErrorMessage}>
+                This image could not be loaded. Try refreshing the gallery.
+              </Text>
+            </View>
+          )}
+
+            {editingCaptionPhotoId === photo.id ? (
+              <View style={styles.captionEditor}>
+                <TextInput
+                  value={editingCaption}
+                  onChangeText={setEditingCaption}
+                  placeholder="Enter photo caption..."
+                  maxLength={255}
+                  multiline
+                  style={styles.captionInput}
+                />
+
+                <View style={styles.captionActions}>
+                  <Pressable
+                    onPress={() => void savePhotoCaption(photo)}
+                    style={styles.saveCaptionButton}
+                  >
+                    <Text style={styles.saveCaptionText}>Save</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      setEditingCaptionPhotoId(null);
+                      setEditingCaption("");
+                    }}
+                    style={styles.cancelCaptionButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel photo"
+                  >
+                    <Text style={styles.cancelCaptionText}>Cancel</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <View>
+                <Text style={styles.photoCaption}>
+                  {photo.caption || "No caption"}
+                </Text>
+
+                <Pressable
+                  onPress={() => {
+                    setEditingCaptionPhotoId(photo.id);
+                    setEditingCaption(photo.caption ?? "");
+                  }}
+                  style={styles.editCaptionButton}
+                >
+                  <Text style={styles.editCaptionText}>Edit caption</Text>
+                </Pressable>
+              </View>
+            )}
 
              <Pressable
               onPress={() => deletePhoto(photo)}
               style={styles.deletePhotoButton}
+              accessibilityRole="button"
+              accessibilityLabel="Delete photo"
             >
               <Text style={styles.deletePhotoText}>
                 Delete photo
@@ -657,10 +878,10 @@ const deletePhoto = (photo: SavedPhoto) => {
               Uploaded:{" "}
               {new Date(photo.created_at).toLocaleString()}
             </Text>
-          </View>
-          
-        ))}
-      </View>
+            </View>
+              ))}
+            </View>
+            </View>
 
       {/* Observation information */}
       <View style={styles.card}>
@@ -810,23 +1031,30 @@ const deletePhoto = (photo: SavedPhoto) => {
             style={styles.closeViewerButton}
             onPress={() => setViewingPhoto(null)}
             accessibilityRole="button"
-            accessibilityLabel="Close photo"
+            accessibilityLabel="Close photo viewer"
           >
-            <Text style={styles.closeViewerText}>✕</Text>
+            {/* <Text style={styles.closeViewerText}>✕</Text> */}
+            <Text style={styles.closeViewerText}>{"\u2715"}</Text>
           </Pressable>
 
-          {viewingPhoto && (
-            <Image
-              source={{
-                uri: `${apiUrl}/observations/${viewingPhoto.observation_id}/photos/${viewingPhoto.id}/image`,
-                headers: {
-                  Authorization: `Bearer ${photoToken}`,
-                },
-              }}
-              style={styles.fullScreenPhoto}
-              contentFit="contain"
-            />
-          )}
+            {viewingPhoto && (
+              <>
+                <Image
+                  source={{
+                    uri: `${apiUrl}/observations/${viewingPhoto.observation_id}/photos/${viewingPhoto.id}/image`,
+                    headers: {
+                      Authorization: `Bearer ${photoToken}`,
+                    },
+                  }}
+                  style={styles.fullScreenPhoto}
+                  contentFit="contain"
+                />
+
+                <Text style={styles.viewerCaption}>
+                  {viewingPhoto.caption?.trim() || "No caption"}
+                </Text>
+              </>
+            )}
         </View>
       </Modal>
     </ScrollView>
@@ -914,24 +1142,35 @@ const styles = StyleSheet.create({
     color: "#2563EB",
     fontWeight: "700",
   },
-  photoCard: {
-    borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
-    paddingTop: 12,
-    marginTop: 8,
-    gap: 6,
-  },
-  photoHeading: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#0F172A",
-  },
+    photoCard: {
+      width: "48%",
+      borderWidth: 1,
+      borderColor: "#E2E8F0",
+      borderRadius: 14,
+      padding: 8,
+      backgroundColor: "#FFFFFF",
+      gap: 6,
+      marginBottom: 4,
+    },
+    selectedPhotoCard: {
+        width: "100%",
+        borderWidth: 1,
+        borderColor: "#E2E8F0",
+        borderRadius: 14,
+        padding: 12,
+        backgroundColor: "#FFFFFF",
+        gap: 8,
+      },
+      photoHeading: {
+        fontSize: 13,
+        fontWeight: "700",
+        color: "#0F172A",
+      },
   photoImage: {
     width: "100%",
-    height: 240,
-    borderRadius: 12,
+    height: 140,
+    borderRadius: 8,
     backgroundColor: "#E5E7EB",
-    marginVertical: 6,
   },
   photoMetadata: {
     color: "#64748B",
@@ -1069,6 +1308,7 @@ const styles = StyleSheet.create({
   backgroundColor: "#000000",
   justifyContent: "center",
   alignItems: "center",
+  paddingHorizontal: 12,
 },
 
 closeViewerButton: {
@@ -1076,23 +1316,35 @@ closeViewerButton: {
   top: 50,
   right: 20,
   zIndex: 10,
-  width: 44,
-  height: 44,
-  borderRadius: 22,
-  backgroundColor: "#333333",
+  width: 46,
+  height: 46,
+  borderRadius: 23,
+  backgroundColor: "rgba(255, 255, 255, 0.18)",
   justifyContent: "center",
   alignItems: "center",
+  borderWidth: 1,
+  borderColor: "rgba(255, 255, 255, 0.3)",
 },
 
 closeViewerText: {
   color: "#FFFFFF",
   fontSize: 24,
   fontWeight: "bold",
+  textAlign: "center",
 },
 
 fullScreenPhoto: {
   width: "100%",
   height: "80%",
+},
+viewerCaption: {
+  color: "#FFFFFF",
+  fontSize: 15,
+  lineHeight: 22,
+  textAlign: "center",
+  paddingHorizontal: 16,
+  paddingTop: 12,
+  paddingBottom: 20,
 },
 deletePhotoButton: {
   marginTop: 8,
@@ -1112,5 +1364,132 @@ uploadButtonText: {
   fontSize: 15,
   fontWeight: "700",
   textAlign: "center",
+},
+  captionInput: {
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    padding: 12,
+    minHeight: 80,
+    textAlignVertical: "top",
+    marginBottom: 4,
+  },
+  captionCounter: {
+    fontSize: 12,
+    color: "#6B7280",
+    textAlign: "right",
+    marginBottom: 12,
+  },
+  photoCaption: {
+    marginTop: 8,
+    fontSize: 14,
+    color: "#374151",
+  },
+  captionEditor: {
+    marginTop: 8,
+  },
+  captionActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 8,
+  },
+  editCaptionButton: {
+    alignSelf: "flex-start",
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: "#DBEAFE",
+  },
+  editCaptionText: {
+    color: "#1D4ED8",
+    fontWeight: "600",
+  },
+  saveCaptionButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    backgroundColor: "#166534",
+  },
+  saveCaptionText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  cancelCaptionButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  cancelCaptionText: {
+    color: "#6B7280",
+    fontWeight: "600",
+  },
+  photoGallery: {
+  flexDirection: "row",
+  flexWrap: "wrap",
+  justifyContent: "space-between",
+  gap: 12,
+  marginTop: 12,
+},
+photoLoading: {
+  alignItems: "center",
+  justifyContent: "center",
+  paddingVertical: 28,
+  gap: 10,
+},
+
+photoLoadingText: {
+  fontSize: 14,
+  color: "#64748B",
+},
+
+emptyPhotoState: {
+  alignItems: "center",
+  justifyContent: "center",
+  paddingVertical: 28,
+  paddingHorizontal: 20,
+  marginTop: 12,
+  borderWidth: 1,
+  borderColor: "#E2E8F0",
+  borderStyle: "dashed",
+  borderRadius: 14,
+  backgroundColor: "#FFFFFF",
+},
+
+emptyPhotoIcon: {
+  fontSize: 36,
+  marginBottom: 10,
+},
+emptyPhotoTitle: {
+  fontSize: 16,
+  fontWeight: "700",
+  color: "#0F172A",
+  marginBottom: 6,
+},
+emptyPhotoMessage: {
+  fontSize: 13,
+  lineHeight: 20,
+  color: "#64748B",
+  textAlign: "center",
+},
+photoImageError: {
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 12,
+  backgroundColor: "#FEF2F2",
+  borderRadius: 8,
+  marginTop: 6,
+},
+photoImageErrorTitle: {
+  fontSize: 13,
+  fontWeight: "700",
+  color: "#B91C1C",
+  marginBottom: 4,
+},
+photoImageErrorMessage: {
+  fontSize: 12,
+  color: "#7F1D1D",
+  textAlign: "center",
+  lineHeight: 18,
 },
 });

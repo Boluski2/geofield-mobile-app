@@ -17,6 +17,7 @@ export default function RegisterScreen() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function register() {
@@ -111,15 +112,25 @@ export default function RegisterScreen() {
           <View style={styles.field}>
             <Text style={styles.label}>Password</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, styles.passwordInput]}
               placeholder="At least 8 characters"
               placeholderTextColor="#98a4b5"
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
+              secureTextEntry={!showPassword}
               autoCapitalize="none"
               autoComplete="new-password"
             />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+              accessibilityState={{ selected: showPassword }}
+              hitSlop={8}
+              onPress={() => setShowPassword((visible) => !visible)}
+              style={styles.passwordToggle}
+            >
+              <Text style={styles.passwordToggleText}>{showPassword ? "Hide" : "Show"}</Text>
+            </Pressable>
             <Text style={styles.helper}>Use at least 8 characters.</Text>
           </View>
 
@@ -260,6 +271,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#172620",
   },
+  passwordInput: { paddingRight: 66 },
+  passwordToggle: { position: "absolute", right: 14, top: 39, minHeight: 34, justifyContent: "center", paddingHorizontal: 4 },
+  passwordToggleText: { color: "#205a46", fontSize: 13, fontWeight: "700" },
   helper: {
     color: "#8a968f",
     fontSize: 12,

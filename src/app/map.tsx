@@ -269,24 +269,24 @@ const selectedObservationId = observationId
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#f5f7f3",
   },
   header: {
     padding: 16,
     gap: 6,
   },
   back: {
-    color: "#2563EB",
+    color: "#205a46",
     fontSize: 16,
     marginBottom: 6,
   },
   heading: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#0F172A",
+    color: "#18352c",
   },
   subtitle: {
-    color: "#64748B",
+    color: "#718078",
   },
   actions: {
     flexDirection: "row",
@@ -295,17 +295,17 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   actionButton: {
-    backgroundColor: "#DBEAFE",
+    backgroundColor: "#dceee3",
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 8,
   },
   actionText: {
-    color: "#1D4ED8",
+    color: "#205a46",
     fontWeight: "600",
   },
   locationButton: {
-    backgroundColor: "#0F766E",
+    backgroundColor: "#205a46",
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 8,
@@ -369,7 +369,7 @@ const styles = StyleSheet.create({
   detailsCard: {
   backgroundColor: "#FFFFFF",
   borderWidth: 1,
-  borderColor: "#CBD5E1",
+    borderColor: "#e5ebe6",
   borderRadius: 12,
   padding: 14,
   marginHorizontal: 12,
@@ -392,7 +392,7 @@ closeText: {
 },
 detailsTitle: {
   fontSize: 18,
-  color: "#0F172A",
+  color: "#18352c",
   fontWeight: "700",
 },
 detailsNotes: {
@@ -404,6 +404,6 @@ detailsCoordinates: {
 },
 detailsDate: {
   fontSize: 12,
-  color: "#64748B",
+  color: "#718078",
 },
 });

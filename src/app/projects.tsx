@@ -99,7 +99,8 @@ export default function ProjectsScreen() {
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
-        <Text style={styles.title}>My Projects</Text>
+        <Text style={styles.eyebrow}>YOUR WORKSPACE</Text>
+        <Text style={styles.title}>Projects</Text>
         <Text style={styles.subtitle}>
           Manage your fieldwork in one place.
         </Text>
@@ -203,7 +204,7 @@ export default function ProjectsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#f3f6fb",
+    backgroundColor: "#f5f7f3",
     padding: 20,
   },
   header: {
@@ -212,10 +213,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "800",
-    color: "#172033",
+    color: "#18352c",
   },
+  eyebrow: { color: "#205a46", fontSize: 10, fontWeight: "800", letterSpacing: 1.3, marginBottom: 7 },
   subtitle: {
-    color: "#64748b",
+    color: "#718078",
     marginTop: 6,
   },
   form: {
@@ -224,7 +226,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     gap: 10,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: "#e5ebe6",
   },
   label: {
     fontWeight: "600",
@@ -242,7 +244,7 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
   },
   button: {
-    backgroundColor: "#2457d6",
+    backgroundColor: "#205a46",
     padding: 14,
     borderRadius: 10,
     alignItems: "center",
@@ -260,7 +262,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginTop: 24,
     marginBottom: 12,
-    color: "#172033",
+    color: "#18352c",
   },
   list: {
     gap: 12,
@@ -271,24 +273,24 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: "#e5ebe6",
   },
   projectName: {
     fontSize: 17,
     fontWeight: "700",
-    color: "#172033",
+    color: "#18352c",
   },
   description: {
-    color: "#64748b",
+    color: "#718078",
     marginTop: 6,
   },
   projectId: {
-    color: "#2457d6",
+    color: "#205a46",
     marginTop: 10,
     fontSize: 12,
   },
   viewTasksButton: {
-    backgroundColor: "#2563EB",
+    backgroundColor: "#205a46",
     padding: 12,
     borderRadius: 8,
     marginTop: 10,
@@ -298,7 +300,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   empty: {
-    color: "#64748b",
+    color: "#718078",
     textAlign: "center",
     padding: 20,
   },
